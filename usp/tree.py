@@ -9,6 +9,7 @@ from .log import create_logger
 from .objects.sitemap import AbstractSitemap, InvalidSitemap, IndexWebsiteSitemap, IndexRobotsTxtSitemap
 from .web_client.abstract_client import AbstractWebClient
 
+SUB_PAGE_BREAK_LIMIT = 30
 log = create_logger(__name__)
 
 _UNPUBLISHED_SITEMAP_PATHS = {
@@ -30,7 +31,7 @@ _UNPUBLISHED_SITEMAP_PATHS = {
 """Paths which are not exposed in robots.txt but might still contain a sitemap."""
 
 
-def sitemap_tree_for_homepage(homepage_url: str, web_client: Optional[AbstractWebClient] = None) -> AbstractSitemap:
+def sitemap_tree_for_homepage(homepage_url: str, web_client: Optional[AbstractWebClient] = None, sub_page_break_limit:int = SUB_PAGE_BREAK_LIMIT) -> AbstractSitemap:
     """
     Using a homepage URL, fetch the tree of sitemaps and pages listed in them.
 
@@ -53,7 +54,7 @@ def sitemap_tree_for_homepage(homepage_url: str, web_client: Optional[AbstractWe
 
     sitemaps = []
 
-    robots_txt_fetcher = SitemapFetcher(url=robots_txt_url, web_client=web_client, recursion_level=0)
+    robots_txt_fetcher = SitemapFetcher(url=robots_txt_url, web_client=web_client, recursion_level=0, sub_page_break_limit=sub_page_break_limit)
     robots_txt_sitemap = robots_txt_fetcher.sitemap()
     sitemaps.append(robots_txt_sitemap)
 
@@ -72,6 +73,7 @@ def sitemap_tree_for_homepage(homepage_url: str, web_client: Optional[AbstractWe
                 url=unpublished_sitemap_url,
                 web_client=web_client,
                 recursion_level=0,
+                sub_page_break_limit=sub_page_break_limit
             )
             unpublished_sitemap = unpublished_sitemap_fetcher.sitemap()
 
