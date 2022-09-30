@@ -42,6 +42,9 @@ from .web_client.requests_client import RequestsWebClient
 
 log = create_logger(__name__)
 
+#Sets the level where recursion stops if there are this many nodes.
+DEFAULT_SUB_PAGE_BREAK_LIMIT = 30
+
 
 class SitemapFetcher(object):
     """robots.txt / XML / plain text sitemap fetcher."""
@@ -58,9 +61,10 @@ class SitemapFetcher(object):
         '_url',
         '_recursion_level',
         '_web_client',
+        '_sub_page_break_limit',
     ]
 
-    def __init__(self, url: str, recursion_level: int, web_client: Optional[AbstractWebClient] = None):
+    def __init__(self, url: str, recursion_level: int, web_client: Optional[AbstractWebClient] = None, sub_page_break_limit:int = DEFAULT_SUB_PAGE_BREAK_LIMIT):
 
         if recursion_level > self.__MAX_RECURSION_LEVEL:
             raise SitemapException("Recursion level exceeded {} for URL {}.".format(self.__MAX_RECURSION_LEVEL, url))
@@ -76,6 +80,7 @@ class SitemapFetcher(object):
         self._url = url
         self._web_client = web_client
         self._recursion_level = recursion_level
+        self._sub_page_break_limit = sub_page_break_limit
 
     def sitemap(self) -> AbstractSitemap:
         log.info("Fetching level {} sitemap from {}...".format(self._recursion_level, self._url))
@@ -99,6 +104,7 @@ class SitemapFetcher(object):
                 content=response_content,
                 recursion_level=self._recursion_level,
                 web_client=self._web_client,
+                sub_page_break_limit = self._sub_page_break_limit
             )
 
         else:
@@ -109,6 +115,7 @@ class SitemapFetcher(object):
                     content=response_content,
                     recursion_level=self._recursion_level,
                     web_client=self._web_client,
+                    sub_page_break_limit = self._sub_page_break_limit
                 )
             else:
                 parser = PlainTextSitemapParser(
@@ -123,6 +130,15 @@ class SitemapFetcher(object):
 
         return sitemap
 
+class SitemapCloser(SitemapFetcher):
+    """
+        Is a class like SitemapFetcher except does not recursively return a parser
+    """
+    def sitemap(self) -> AbstractSitemap:
+        return PagesXMLSitemap(
+            url=self._url,
+            pages = []
+        )
 
 class AbstractSitemapParser(object, metaclass=abc.ABCMeta):
     """Abstract robots.txt / XML / plain text sitemap parser."""
@@ -148,8 +164,9 @@ class AbstractSitemapParser(object, metaclass=abc.ABCMeta):
 class IndexRobotsTxtSitemapParser(AbstractSitemapParser):
     """robots.txt index sitemap parser."""
 
-    def __init__(self, url: str, content: str, recursion_level: int, web_client: AbstractWebClient):
+    def __init__(self, url: str, content: str, recursion_level: int, web_client: AbstractWebClient, sub_page_break_limit: int):
         super().__init__(url=url, content=content, recursion_level=recursion_level, web_client=web_client)
+        self._sub_page_break_limit = sub_page_break_limit
 
         if not self._url.endswith('/robots.txt'):
             raise SitemapException("URL does not look like robots.txt URL: {}".format(self._url))
@@ -178,6 +195,7 @@ class IndexRobotsTxtSitemapParser(AbstractSitemapParser):
                 url=sitemap_url,
                 recursion_level=self._recursion_level,
                 web_client=self._web_client,
+                sub_page_break_limit=self._sub_page_break_limit,
             )
             fetched_sitemap = fetcher.sitemap()
             sub_sitemaps.append(fetched_sitemap)
@@ -220,13 +238,15 @@ class XMLSitemapParser(AbstractSitemapParser):
 
     __slots__ = [
         '_concrete_parser',
+        '_sub_page_break_limit',
     ]
 
-    def __init__(self, url: str, content: str, recursion_level: int, web_client: AbstractWebClient):
+    def __init__(self, url: str, content: str, recursion_level: int, web_client: AbstractWebClient, sub_page_break_limit: int):
         super().__init__(url=url, content=content, recursion_level=recursion_level, web_client=web_client)
 
         # Will be initialized when the type of sitemap is known
         self._concrete_parser = None
+        self._sub_page_break_limit = sub_page_break_limit
 
     def sitemap(self) -> AbstractSitemap:
 
@@ -311,6 +331,7 @@ class XMLSitemapParser(AbstractSitemapParser):
                     url=self._url,
                     web_client=self._web_client,
                     recursion_level=self._recursion_level,
+                    sub_page_break_limit=self._sub_page_break_limit,
                 )
 
             elif name == 'rss':
@@ -346,6 +367,11 @@ class XMLSitemapParser(AbstractSitemapParser):
 class AbstractXMLSitemapParser(object, metaclass=abc.ABCMeta):
     """
     Abstract XML sitemap parser.
+    """
+
+    __SUB_PAGE_BREAK_LIMIT__ = DEFAULT_SUB_PAGE_BREAK_LIMIT
+    """
+        Sets the level where recursion stops if there are this many nodes.
     """
 
     __slots__ = [
@@ -398,14 +424,16 @@ class IndexXMLSitemapParser(AbstractXMLSitemapParser):
 
         # List of sub-sitemap URLs found in this index sitemap
         '_sub_sitemap_urls',
+        '_sub_page_break_limit',
     ]
 
-    def __init__(self, url: str, web_client: AbstractWebClient, recursion_level: int):
+    def __init__(self, url: str, web_client: AbstractWebClient, recursion_level: int, sub_page_break_limit:int = AbstractXMLSitemapParser.__SUB_PAGE_BREAK_LIMIT__):
         super().__init__(url=url)
 
         self._web_client = web_client
         self._recursion_level = recursion_level
         self._sub_sitemap_urls = []
+        self._sub_page_break_limit = sub_page_break_limit
 
     def xml_element_end(self, name: str) -> None:
 
@@ -424,11 +452,16 @@ class IndexXMLSitemapParser(AbstractXMLSitemapParser):
 
         sub_sitemaps = []
 
+        if len(self._sub_sitemap_urls) >= self._sub_page_break_limit:
+            FetchClass = SitemapCloser
+        else:
+            FetchClass = SitemapFetcher
+
         for sub_sitemap_url in self._sub_sitemap_urls:
 
             # URL might be invalid, or recursion limit might have been reached
             try:
-                fetcher = SitemapFetcher(url=sub_sitemap_url,
+                fetcher = FetchClass(url=sub_sitemap_url,
                                          recursion_level=self._recursion_level + 1,
                                          web_client=self._web_client)
                 fetched_sitemap = fetcher.sitemap()
